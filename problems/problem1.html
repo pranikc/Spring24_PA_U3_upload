@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>CPSC 487/587</title>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.1/dist/lil-gui.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/10.3.0/math.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/quaternion@1.5.1/quaternion.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/numeric@1.2.6/numeric-1.2.6.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stats.js@0.17.0/build/stats.min.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+              "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+              "three/": "https://unpkg.com/three@0.160.0/"
+            }
+        }
+    </script>
+</head>
+<body>
+<script type="module">
+    import {get_default_lil_gui, ThreeEngine} from "../js/utils/utils_three.js";
+
+    // todo: create a visualization that demonstrates your knowledge of displacement-based
+    // todo: distance over SE(3).  Note that this will use your logarithm solution from PS_U3,
+    // todo: so you must finish that prior to starting this problem.
+    // todo: Feel free to make this visualization as creative as you want, or, conversely,
+    // todo: feel free to create a visualization like the one here
+    // todo: https://yale-cpsc-487-587-internal-djrakita-c95fa6c3239a481a48d29a6b0fd.gitlab.io/html/visualizations/SE2_distance2.html
+    // todo: though applied to 3D rotations + translations instead of 2D rotations + translations.
+    // todo: Feel free to use the 3x3 matrix inverse function provided by me below if you want.
+
+    // A must be a 3x3 matrix in row major order
+    // [[a11, a12, a13], [a21, a22, a23], [a31, a32, a33]]
+    function matrix_inverse_3x3(A) {
+        let det = A[0][0] * (A[1][1] * A[2][2] - A[2][1] * A[1][2]) -
+            A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0]) +
+            A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
+
+        if (det === 0) {
+            return null; // No inverse exists if determinant is 0
+        }
+
+        let cofactors = [
+            [
+                (A[1][1] * A[2][2] - A[2][1] * A[1][2]),
+                -(A[1][0] * A[2][2] - A[1][2] * A[2][0]),
+                (A[1][0] * A[2][1] - A[2][0] * A[1][1])
+            ],
+            [
+                -(A[0][1] * A[2][2] - A[0][2] * A[2][1]),
+                (A[0][0] * A[2][2] - A[0][2] * A[2][0]),
+                -(A[0][0] * A[2][1] - A[2][0] * A[0][1])
+            ],
+            [
+                (A[0][1] * A[1][2] - A[0][2] * A[1][1]),
+                -(A[0][0] * A[1][2] - A[1][0] * A[0][2]),
+                (A[0][0] * A[1][1] - A[1][0] * A[0][1])
+            ]
+        ];
+
+        let adjugate = [
+            [cofactors[0][0] / det, cofactors[1][0] / det, cofactors[2][0] / det],
+            [cofactors[0][1] / det, cofactors[1][1] / det, cofactors[2][1] / det],
+            [cofactors[0][2] / det, cofactors[1][2] / det, cofactors[2][2] / det]
+        ];
+
+        return adjugate;
+    }
+
+    function transpose(matrix) {
+        return matrix[0].map((col, i) => matrix.map(row => row[i]));
+    }
+
+    function scalar_mult(mat, k) {
+        for (var i = 0; i < 3; i++) {
+            for (var j = 0; j < 3; j++) {
+                mat[i][j] = mat[i][j] * k;        
+            }
+        }
+        return mat;
+    }
+
+    function add(A, B) {
+        let C = new Array(3);
+        for (var k = 0; k < 3; k++) {
+            C[k] = new Array(3); 
+        }
+
+        for (var i = 0; i < 3; i++) {
+            for (var j = 0; j < 3; j++) {
+                C[i][j] = A[i][j] + B[i][j];  
+            }
+        }
+        return C;
+    } 
+
+    function matvec(A,x) {
+        let y = new Array(3);
+        for (var i = 0; i < 3; i++) {
+            var inner_prod = 0;
+            for (var j = 0; j < 3; j++) {
+                inner_prod += A[i][j]*x[j];
+            }
+            y[i] = inner_prod;
+        }
+        return y;
+    }
+
+    function se3(R,t) {
+        let eye = [[1,0,0],[0,1,0],[0,0,1]];
+
+        let beta = Math.acos((R[0][0]+R[1][1]+R[2][2]-1)/2);
+        if (beta == Math.PI) {
+            var A = [[0,-Math.PI*Math.sqrt(0.5*(R[2][2]+1)),Math.PI*Math.sqrt(0.5*(R[1][1]+1))],[Math.PI*Math.sqrt(0.5*(R[2][2]+1)),0,-Math.PI*Math.sqrt(0.5*(R[0][0]+1))],[-Math.PI*Math.sqrt(0.5*(R[1][1]+1)),Math.PI*Math.sqrt(0.5*(R[0][0]+1)),0]];
+        } else if (beta > 0.001) {
+            var kA = beta/(2*Math.sin(beta));
+            var temp1 = scalar_mult(transpose(R),-1);
+            var temp2 = add(R,temp1);
+            var A = scalar_mult(temp2,kA);
+        } else {
+            var kA = 1/2 + (beta**2)/12 + (7*beta**4)/720;
+            var temp1 = scalar_mult(transpose(R),-1);
+            var temp2 = add(R,temp1);
+            var A = scalar_mult(temp2,kA);
+        }
+
+        var B = multiplyMatrices(A,A);
+        if (beta < 0.001) {
+            var p2 = 1/2 + (beta**2)/24 + (beta**4)/720
+            var q2 = 1/3 + (beta**2)/120 + (beta**4)/5040
+        } else {
+            var p2 = (1-Math.cos(beta))/(beta**2);
+            var q2 = (beta-Math.sin(beta))/(beta**3);
+        }
+        let Atemp = scalar_mult(A,p2);
+        let Btemp = scalar_mult(B,q2);
+        let temp6 = add(Atemp,Btemp);
+        let S = add(eye,temp6);
+        let Sinv = matrix_inverse_3x3(S);
+        let a_arr = matvec(Sinv,t);
+
+        let ret_mat = [[A[0][0],A[0][1],A[0][2],a_arr[0]],[A[1][0],A[1][1],A[1][2],a_arr[1]],[A[2][0],A[2][1],A[2][2],a_arr[2]],[0,0,0,1]];
+        return ret_mat;
+    }
+
+    function multiplyMatrices(m1, m2) {
+        var result = [];
+        for (var i = 0; i < m1.length; i++) {
+            result[i] = [];
+            for (var j = 0; j < m2[0].length; j++) {
+                var sum = 0;
+                for (var k = 0; k < m1[0].length; k++) {
+                    sum += m1[i][k] * m2[k][j];
+                }
+                result[i][j] = sum;
+            }
+        }
+        return result;
+    }
+
+    function dis_val(a1,b1,c1,d1,e1,f1,a2,b2,c2,d2,e2,f2) {
+        let a_so3 = SE3(a1,b1,c1,d1,e1,f1)[0];
+        let a_t = SE3(a1,b1,c1,d1,e1,f1)[1];
+        let b_so3 = SE3(a2,b2,c2,d2,e2,f2)[0];
+        let b_t = SE3(a2,b2,c2,d2,e2,f2)[1];
+
+        let A = [[a_so3[0][0], a_so3[0][1], a_so3[0][2],a_t[0]],[a_so3[1][0],a_so3[1][1],a_so3[1][2],a_t[1]],[a_so3[2][0],a_so3[2][1],a_so3[2][2],a_t[2]],[0,0,0,1]];
+        let B = [[b_so3[0][0], b_so3[0][1], b_so3[0][2],b_t[0]],[b_so3[1][0],b_so3[1][1],b_so3[1][2],b_t[1]],[b_so3[2][0],b_so3[2][1],b_so3[2][2],b_t[2]],[0,0,0,1]];
+
+        let d = multiplyMatrices(math.inv(A), B);
+        let R = [[d[0][0],d[0][1],d[0][2]],[d[1][0],d[1][1],d[1][2]],[d[2][0],d[2][1],d[2][2]]];
+        let t = [d[0][3],d[1][3],d[2][3]];
+        let ret_mat = se3(R,t);
+
+        let a3 = ret_mat[2][1];
+        let b3 = ret_mat[0][2];
+        let c3 = ret_mat[1][0];
+        let d3 = ret_mat[0][3];
+        let e3 = ret_mat[1][3];
+        let f3 = ret_mat[2][3];
+
+        return Math.sqrt(a3**2+b3**2+c3**2+d3**2+e3**2+f3**2);
+    }
+
+    function SE3(a,b,c,d,e,f) {
+        let eye = [[1,0,0],[0,1,0],[0,0,1]];
+        let A = [[0,-c,b],[c,0,-a],[-b,a,0]];
+        let B = [[-1*(b**2+c**2),a*b,a*c],[a*b,-1*(a**2+c**2),b*c],[a*c,b*c,-1*(a**2+b**2)]];
+
+        let beta = Math.sqrt(a**2+b**2+c**2);
+        if (beta < 0.001) {
+            var p1 = 1-(beta**2)/6+(beta**4)/120;
+            var q1 = (1/2)-(beta**2)/24+(beta**4)/720;
+        } else {
+            var p1 = Math.sin(beta)/beta;
+            var q1 = (1-Math.cos(beta))/(beta**2);
+        }
+
+        let temp1 = scalar_mult(A,p1);
+        let temp2 = scalar_mult(B,q1);
+        let temp3 = add(temp1,temp2);
+        let R = add(eye,temp3);
+
+        if (beta < 0.001) {
+            var p2 = (1/2)+(beta**2)/24+(beta**4)/720;
+            var q2 = (1/6)+(beta**2)/120+(beta**4)/5040;
+        } else {
+            var p2 = (1-Math.cos(beta))/(beta**2);
+            var q2 = (beta-Math.sin(beta))/(beta**3);
+        }
+        let Atemp = scalar_mult(A,p2);
+        let Btemp = scalar_mult(B,q2);
+        let temp6 = add(Atemp,Btemp);
+        let S = add(eye,temp6);
+        //let t = matvec(S,[d,e,f]);
+        let t = [d,e,f];
+
+        let ret_mat = [R,t];
+        return ret_mat;
+    }
+
+    let settings = {
+        mesh_visible: true,
+        wireframe_visible: true,
+        t1_1 : 0,
+        t2_1 : 0,
+        t3_1 : 0,
+        x1 : 0,
+        y1 : 0,
+        z1 : 0,
+        x2 : 0,
+        y2 : 0,
+        z2 : 0,
+        t1_2 : 0,
+        t2_2 : 0,
+        t3_2 : 0,
+        dis: 0,
+    }
+
+    let gui = get_default_lil_gui();
+    gui.add(settings, 'wireframe_visible').name('Draw Wireframe');
+    gui.add(settings, 'mesh_visible').name('Draw Mesh');
+
+    let folder = gui.addFolder('Coords');
+    folder.add(settings, 't1_1', -2.0*Math.PI, 2.0*Math.PI).name('t1_1');
+    folder.add(settings, 't2_1', -2.0*Math.PI, 2.0*Math.PI).name('t2_1');
+    folder.add(settings, 't3_1', -2.0*Math.PI, 2.0*Math.PI).name('t3_1');
+    folder.add(settings, 'x1', -10.0, 10.0).name('X1');
+    folder.add(settings, 'y1', -10.0, 10.0).name('Y1');
+    folder.add(settings, 'z1', -10.0, 10.0).name('Z1');
+    folder.add(settings, 't1_2', -2.0*Math.PI, 2.0*Math.PI).name('t1_2');
+    folder.add(settings, 't2_2', -2.0*Math.PI, 2.0*Math.PI).name('t2_2');
+    folder.add(settings, 't3_2', -2.0*Math.PI, 2.0*Math.PI).name('t3_2');
+    folder.add(settings, 'x2', -10.0, 10.0).name('X2');
+    folder.add(settings, 'y2', -10.0, 10.0).name('Y2');
+    folder.add(settings, 'z2', -10.0, 10.0).name('Z2');
+
+    gui.add(settings, 'dis').name('Dis_val: ').listen().disable();
+
+    let engine = ThreeEngine.new_default_3d();
+    engine.add_suzanne_monkey_as_mesh_object(0x00eeff);
+    engine.toggle_mesh_object_wireframe_visibility(0);
+
+    engine.add_suzanne_monkey_as_mesh_object(0x008000);
+    engine.toggle_mesh_object_wireframe_visibility(0);
+
+    let standard_points1 = engine.get_local_vertex_positions_of_mesh_object(0);
+    let wireframe_points1 = engine.get_local_vertex_positions_of_mesh_object_wireframe(0);
+
+    let standard_points2 = engine.get_local_vertex_positions_of_mesh_object(1);
+    let wireframe_points2 = engine.get_local_vertex_positions_of_mesh_object_wireframe(1);
+
+    function multiply_3x3_matrix_and_3x1_vector(matrix, vector, transl) {
+        let return_vec = [];
+        for (var i = 0; i < 3; i++) {
+            let innerProd = 0;
+            for (var j = 0; j < 3; j++) {
+                innerProd = innerProd + matrix[i][j]*vector[j][0];
+            }
+            return_vec.push([innerProd+transl[i]]);
+        }
+        return return_vec;
+    }
+
+    engine.animation_loop(() => {
+        let m1 = SE3(settings.t1_1,settings.t2_1,settings.t3_1,settings.x1,settings.y1,settings.z1)[0];
+        let transl1 = SE3(settings.t1_1,settings.t2_1,settings.t3_1,settings.x1,settings.y1,settings.z1)[1];
+
+        let m2 = SE3(settings.t1_2,settings.t2_2,settings.t3_2,settings.x2,settings.y2,settings.z2)[0];
+        let transl2 = SE3(settings.t1_2,settings.t2_2,settings.t3_2,settings.x2,settings.y2,settings.z2)[1];
+
+        let new_standard_points1 = [];
+        let new_wireframe_points1 = [];
+
+        let new_standard_points2 = [];
+        let new_wireframe_points2 = [];
+        
+        for (var i = 0; i < standard_points1.length; i++) {
+            new_standard_points1.push(multiply_3x3_matrix_and_3x1_vector(m1, standard_points1[i],transl1));
+        }
+
+        for (var i = 0; i < wireframe_points1.length; i++) {
+            new_wireframe_points1.push(multiply_3x3_matrix_and_3x1_vector(m1, wireframe_points1[i],transl1));
+        }
+
+        for (var i = 0; i < standard_points2.length; i++) {
+            new_standard_points2.push(multiply_3x3_matrix_and_3x1_vector(m2, standard_points2[i],transl2));
+        }
+
+        for (var i = 0; i < wireframe_points2.length; i++) {
+            new_wireframe_points2.push(multiply_3x3_matrix_and_3x1_vector(m2, wireframe_points2[i],transl2));
+        }
+
+        engine.update_vertex_positions_of_mesh_object(0, new_standard_points1);
+        engine.update_vertex_positions_of_mesh_object_wireframe(0, new_wireframe_points1);
+
+        engine.update_vertex_positions_of_mesh_object(1, new_standard_points2);
+        engine.update_vertex_positions_of_mesh_object_wireframe(1, new_wireframe_points2);
+
+        settings.dis = dis_val(settings.t1_1,settings.t2_1,settings.t3_1,settings.x1,settings.y1,settings.z1,settings.t1_2,settings.t2_2,settings.t3_2,settings.x2,settings.y2,settings.z2);
+
+        engine.mesh_objects[0].visible = settings.mesh_visible;
+        engine.set_mesh_object_wireframe_visibility(0, settings.wireframe_visible);
+
+        engine.mesh_objects[1].visible = settings.mesh_visible;
+        engine.set_mesh_object_wireframe_visibility(1, settings.wireframe_visible);
+    });
+
+
+
+</script>
+</body>
+</html>
